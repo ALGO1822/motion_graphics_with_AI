@@ -1,102 +1,90 @@
-// Simple deterministic Pseudo-Random Number Generator (LCG)
-class PRNG {
-    constructor(seed) {
-        this.seed = seed;
-    }
-    
-    // Returns a float between 0 and 1
-    next() {
-        this.seed = (this.seed * 9301 + 49297) % 233280;
-        return this.seed / 233280;
-    }
-
-    // Range between min and max
-    range(min, max) {
-        return min + this.next() * (max - min);
-    }
-}
+import { SystemManager } from './systems.js';
+import { TypographySystem } from './typography.js';
+import { Easing, noise2D } from './math.js';
 
 const config = {
     width: 1920,
     height: 1080,
     fps: 30,
-    durationInSeconds: 2 // Short duration for testing
+    durationInSeconds: 10
 };
-
-// Expose configuration so Playwright can read it
 window.animationConfig = config;
 
-// Setup Canvas
 const canvas = document.getElementById('stage');
-const ctx = canvas.getContext('2d');
+const ctx = canvas.getContext('2d', { alpha: false }); // Better performance if no transparency needed for the main canvas
 
 canvas.width = config.width;
 canvas.height = config.height;
 
-/**
- * Called by Playwright to render a specific frame
- * @param {number} frame - Current frame number (0 to totalFrames - 1)
- */
+// Global state
+let systemManager = null;
+let typoSystem = null;
+
+function init() {
+    systemManager = new SystemManager();
+    typoSystem = new TypographySystem(config.width, config.height);
+}
+
+// Map time to phase
+function getPhase(time) {
+    if (time < 2.0) return { name: 'FRAGMENTATION', progress: time / 2.0 };
+    if (time < 4.0) return { name: 'DISCOVERY', progress: (time - 2.0) / 2.0 };
+    if (time < 6.0) return { name: 'COMPLEXITY', progress: (time - 4.0) / 2.0 };
+    if (time < 8.0) return { name: 'INSTABILITY', progress: (time - 6.0) / 2.0 };
+    return { name: 'SYNTHESIS', progress: Math.min((time - 8.0) / 2.0, 1.0) };
+}
+
 window.renderFrame = function(frame) {
+    if (frame === 0 || !systemManager) {
+        init();
+    }
+    
     const time = frame / config.fps;
+    const { name: phaseName, progress: phaseProgress } = getPhase(time);
     
-    // Create a new PRNG instance seeded by the frame number 
-    // to ensure deterministic randomness per frame if needed,
-    // or seed by a global seed if we want continuous randomness over time.
-    // For motion graphics, usually we derive animations directly from time.
-    const rng = new PRNG(42 + frame);
-
-    // Clear background
-    ctx.fillStyle = '#111';
+    // Update logic
+    systemManager.update(time, phaseName, phaseProgress);
+    
+    // Trail effect using an offscreen canvas or just semi-transparent black rect
+    // We will use a trailing rect for simple glow and persistence
+    ctx.globalCompositeOperation = 'source-over';
+    
+    // During INSTABILITY, trails get longer (less fade)
+    let alpha = 0.2;
+    if (phaseName === 'INSTABILITY') alpha = 0.05 + 0.15 * (1 - phaseProgress);
+    if (phaseName === 'SYNTHESIS') alpha = 0.3; // Clean up the mess faster
+    
+    ctx.fillStyle = `rgba(10, 12, 16, ${alpha})`;
     ctx.fillRect(0, 0, config.width, config.height);
-
-    // Calculate animation properties
-    // Let's do a simple rotating and oscillating square
-    const cx = config.width / 2;
-    const cy = config.height / 2;
     
-    // 1 cycle per second
-    const phase = (time % 1) * Math.PI * 2;
+    // Draw background text layer
+    ctx.globalCompositeOperation = 'screen';
+    let textAlpha = 0;
+    if (phaseName === 'COMPLEXITY') textAlpha = 0.1 * Easing.easeInQuad(phaseProgress);
+    if (phaseName === 'INSTABILITY') textAlpha = 0.1 + noise2D(time*5, 0) * 0.1;
+    if (phaseName === 'SYNTHESIS') textAlpha = 0.05 * (1 - Easing.easeOutQuad(phaseProgress));
     
-    const xOffset = Math.sin(phase) * 400;
-    const yOffset = Math.cos(phase * 2) * 200;
+    if (textAlpha > 0) {
+        const bgCanvas = typoSystem.renderBackgroundCode(time, textAlpha);
+        ctx.drawImage(bgCanvas, 0, 0);
+    }
     
-    const size = 200 + Math.sin(time * Math.PI * 2) * 50;
-    const rotation = time * Math.PI * 0.5;
-
-    // Draw
-    ctx.save();
-    ctx.translate(cx + xOffset, cy + yOffset);
-    ctx.rotate(rotation);
+    // Draw systems
+    ctx.globalCompositeOperation = 'screen';
+    systemManager.draw(ctx, time, phaseName, phaseProgress);
     
-    // Deterministic random color based on frame
-    const r = Math.floor(rng.range(100, 255));
-    const g = Math.floor(rng.range(100, 255));
-    const b = Math.floor(rng.range(100, 255));
+    // Draw foreground typography to emphasize the story
+    ctx.globalCompositeOperation = 'source-over';
+    if (phaseName === 'SYNTHESIS') {
+        const typoAlpha = Easing.easeOutQuad(phaseProgress);
+        // A single, strong resolution message
+        const typoCanvas = typoSystem.renderText("COHERENCE", config.width / 2, config.height / 2, 100, typoAlpha, 40);
+        ctx.drawImage(typoCanvas, 0, 0);
+    } else if (phaseName === 'FRAGMENTATION') {
+        const typoAlpha = 0.3 * (1 - phaseProgress);
+        const typoCanvas = typoSystem.renderText("FRAGMENTS", config.width / 2, config.height / 2, 40, typoAlpha, 20 + phaseProgress * 50);
+        ctx.drawImage(typoCanvas, 0, 0);
+    }
     
-    ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
-    ctx.fillRect(-size / 2, -size / 2, size, size);
-    
-    ctx.strokeStyle = '#fff';
-    ctx.lineWidth = 10;
-    ctx.strokeRect(-size / 2, -size / 2, size, size);
-    
-    ctx.restore();
-    
-    // Draw frame counter
-    ctx.fillStyle = '#fff';
-    ctx.font = '48px monospace';
-    ctx.fillText(`Frame: ${frame}`, 50, 80);
-    ctx.fillText(`Time:  ${time.toFixed(3)}s`, 50, 140);
+    // Subtle vignette or noise could go here as post-processing
 };
-
-// For local testing (optional, not used by final renderer)
-window.testPreview = function() {
-    let frame = 0;
-    setInterval(() => {
-        window.renderFrame(frame);
-        frame = (frame + 1) % (config.fps * config.durationInSeconds);
-    }, 1000 / config.fps);
-};
-
-// window.testPreview();

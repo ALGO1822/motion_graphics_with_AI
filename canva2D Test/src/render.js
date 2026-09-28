@@ -33,7 +33,9 @@ if (fs.existsSync(OUTPUT_FILE)) {
 
 async function renderFrames() {
     console.log('Starting Playwright...');
-    const browser = await chromium.launch();
+    const browser = await chromium.launch({
+        args: ['--allow-file-access-from-files']
+    });
     const page = await browser.newPage();
     
     const indexPath = path.join(projectRoot, 'index.html');
