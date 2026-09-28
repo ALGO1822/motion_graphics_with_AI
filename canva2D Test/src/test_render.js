@@ -38,7 +38,7 @@ async function testFrames() {
     const canvasElement = await page.$('#stage');
 
     // Render test frames
-    const frames = [0, 90, 150, 270, 299];
+    const frames = [0, 30, 60, 90, 120, 150, 160, 170, 180, 190, 200, 210, 240, 270, 299];
     for (const frame of frames) {
         await page.evaluate((f) => window.renderFrame(f), frame);
         await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));

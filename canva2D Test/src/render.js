@@ -103,7 +103,12 @@ function encodeVideo(fps) {
         // -i inputPattern
         // -c:v libx264 : use h264 codec
         // -pix_fmt yuv420p : standard pixel format for mp4 compatibility
-        const ffmpegCmd = `ffmpeg -y -framerate ${fps} -i "${inputPattern}" -c:v libx264 -pix_fmt yuv420p "${OUTPUT_FILE}"`;
+        const soundtrackPath = path.join(OUT_DIR, 'soundtrack.wav');
+        let ffmpegCmd = `ffmpeg -y -framerate ${fps} -i "${inputPattern}" -c:v libx264 -pix_fmt yuv420p "${OUTPUT_FILE}"`;
+        
+        if (fs.existsSync(soundtrackPath)) {
+            ffmpegCmd = `ffmpeg -y -framerate ${fps} -i "${inputPattern}" -i "${soundtrackPath}" -c:v libx264 -pix_fmt yuv420p -c:a aac -shortest "${OUTPUT_FILE}"`;
+        }
         
         console.log(`Executing: ${ffmpegCmd}`);
         

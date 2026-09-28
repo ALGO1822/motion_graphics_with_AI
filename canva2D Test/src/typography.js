@@ -1,50 +1,157 @@
-export class TypographySystem {
-    constructor(width, height) {
-        this.width = width;
-        this.height = height;
-        this.canvas = document.createElement('canvas');
-        this.canvas.width = width;
-        this.canvas.height = height;
-        this.ctx = this.canvas.getContext('2d');
-    }
+import { createLayer } from './graphics.js';
 
-    // Draw some stylized text to an offscreen canvas
-    renderText(text, x, y, size, alpha, tracking = 0) {
-        this.ctx.clearRect(0, 0, this.width, this.height);
-        this.ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
-        this.ctx.font = `bold ${size}px "Courier New", monospace`;
-        this.ctx.textAlign = 'center';
-        this.ctx.textBaseline = 'middle';
-        
-        // Custom tracking (letter-spacing)
-        if (tracking > 0) {
-            let currentX = x - ((text.length - 1) * tracking + this.ctx.measureText(text).width) / 2;
-            for (let i = 0; i < text.length; i++) {
-                const char = text[i];
-                this.ctx.fillText(char, currentX + this.ctx.measureText(char).width / 2, y);
-                currentX += this.ctx.measureText(char).width + tracking;
-            }
-        } else {
-            this.ctx.fillText(text, x, y);
+export function drawText(ctx, text, x, y, font, color, align = 'left', baseline = 'top', tracking = 0) {
+    ctx.save();
+    ctx.font = font;
+    ctx.fillStyle = color;
+    ctx.textAlign = tracking > 0 ? 'left' : align;
+    ctx.textBaseline = baseline;
+    
+    if (tracking > 0) {
+        let currentX = x;
+        if (align === 'center') {
+            const totalWidth = ctx.measureText(text).width + (text.length - 1) * tracking;
+            currentX = x - totalWidth / 2;
+        } else if (align === 'right') {
+            const totalWidth = ctx.measureText(text).width + (text.length - 1) * tracking;
+            currentX = x - totalWidth;
         }
         
-        return this.canvas;
+        for (let i = 0; i < text.length; i++) {
+            const char = text[i];
+            ctx.fillText(char, currentX, y);
+            currentX += ctx.measureText(char).width + tracking;
+        }
+    } else {
+        ctx.fillText(text, x, y);
     }
     
-    // Abstract grid of words for background
-    renderBackgroundCode(time, alpha) {
-        this.ctx.clearRect(0, 0, this.width, this.height);
-        this.ctx.fillStyle = `rgba(100, 150, 255, ${alpha})`;
-        this.ctx.font = '12px monospace';
+    ctx.restore();
+}
+
+/**
+ * Renders kinetic typography where each letter can be transformed by a callback function.
+ */
+export function drawKineticWord(ctx, text, x, y, font, color, align, baseline, tracking, transformCallback) {
+    ctx.save();
+    ctx.font = font;
+    ctx.textBaseline = baseline;
+    
+    // First, measure to align properly
+    let charWidths = [];
+    let totalWidth = 0;
+    for (let i = 0; i < text.length; i++) {
+        const cw = ctx.measureText(text[i]).width;
+        charWidths.push(cw);
+        totalWidth += cw;
+    }
+    totalWidth += (text.length - 1) * tracking;
+
+    let startX = x;
+    if (align === 'center') startX -= totalWidth / 2;
+    if (align === 'right') startX -= totalWidth;
+
+    let currentX = startX;
+    
+    for (let i = 0; i < text.length; i++) {
+        const char = text[i];
+        const cx = currentX + charWidths[i] / 2;
+        const cy = y;
         
-        const words = ['FLUTTER', 'GO', 'NODE', 'OPTIMIZATION', 'STATE', 'POSTGRES', 'SYS', 'ALLOCATE', 'RESOLVE', 'COMPUTE', 'CONSTRAINT', 'GRAPH', 'DATA', 'ROUTING'];
+        // Let the callback dictate the transform for this letter
+        // Callback returns { tx, ty, scale, rot, opacity, color } (optional fields)
+        const tr = transformCallback(char, i, cx, cy) || {};
         
-        for (let i = 0; i < 80; i++) {
-            const x = (i * 137 + time * 20) % this.width;
-            const y = (i * 93 + time * 10) % this.height;
-            const word = words[i % words.length];
-            this.ctx.fillText(word, x, y);
+        ctx.save();
+        ctx.globalAlpha = tr.opacity !== undefined ? tr.opacity : 1;
+        ctx.translate(cx + (tr.tx || 0), cy + (tr.ty || 0));
+        ctx.rotate(tr.rot || 0);
+        
+        // Handle asymmetric scale
+        const sx = tr.scaleX !== undefined ? tr.scaleX : (tr.scale !== undefined ? tr.scale : 1);
+        const sy = tr.scaleY !== undefined ? tr.scaleY : (tr.scale !== undefined ? tr.scale : 1);
+        ctx.scale(sx, sy);
+
+        ctx.fillStyle = tr.color || color;
+        ctx.textAlign = 'center'; // We translate to center of character
+        
+        // Adjust for baseline when scaled/rotated?
+        ctx.fillText(char, 0, 0);
+        ctx.restore();
+        
+        currentX += charWidths[i] + tracking;
+    }
+    
+    ctx.restore();
+}
+
+// Global cache for sampled points to avoid expensive getImageData in every frame
+const pointsCache = new Map();
+
+/**
+ * Samples a text string into an array of solid points.
+ * Returns array of {x, y, alpha}
+ */
+export function textToPoints(text, font, tracking, density = 4) {
+    const cacheKey = `${text}-${font}-${tracking}-${density}`;
+    if (pointsCache.has(cacheKey)) return pointsCache.get(cacheKey);
+
+    const layer = createLayer(1920, 1080);
+    drawText(layer.ctx, text, 960, 540, font, '#FFFFFF', 'center', 'middle', tracking);
+    
+    const imageData = layer.ctx.getImageData(0, 0, 1920, 1080).data;
+    const points = [];
+    
+    for (let y = 0; y < 1080; y += density) {
+        for (let x = 0; x < 1920; x += density) {
+            const index = (y * 1920 + x) * 4;
+            const alpha = imageData[index + 3];
+            if (alpha > 50) {
+                points.push({
+                    x: x - 960,
+                    y: y - 540,
+                    alpha: alpha / 255
+                });
+            }
         }
-        return this.canvas;
+    }
+    
+    pointsCache.set(cacheKey, points);
+    return points;
+}
+
+/**
+ * Renders horizontal/vertical slices of a source canvas with procedural displacement.
+ */
+export function drawSliced(ctx, sourceCanvas, x, y, w, h, slices, isVertical, offsetFunc) {
+    if (isVertical) {
+        const sliceW = w / slices;
+        for (let i = 0; i < slices; i++) {
+            const sx = i * sliceW;
+            const offset = offsetFunc(i, slices, sx);
+            // offset has { dx, dy, opacity, scaleY } etc.
+            ctx.save();
+            ctx.globalAlpha = offset.opacity !== undefined ? offset.opacity : 1;
+            ctx.translate(x + sx + (offset.dx || 0), y + (offset.dy || 0));
+            if (offset.scaleY !== undefined) {
+                ctx.scale(1, offset.scaleY);
+            }
+            ctx.drawImage(sourceCanvas, sx, 0, sliceW, h, 0, 0, sliceW, h);
+            ctx.restore();
+        }
+    } else {
+        const sliceH = h / slices;
+        for (let i = 0; i < slices; i++) {
+            const sy = i * sliceH;
+            const offset = offsetFunc(i, slices, sy);
+            ctx.save();
+            ctx.globalAlpha = offset.opacity !== undefined ? offset.opacity : 1;
+            ctx.translate(x + (offset.dx || 0), y + sy + (offset.dy || 0));
+            if (offset.scaleX !== undefined) {
+                ctx.scale(offset.scaleX, 1);
+            }
+            ctx.drawImage(sourceCanvas, 0, sy, w, sliceH, 0, 0, w, sliceH);
+            ctx.restore();
+        }
     }
 }
