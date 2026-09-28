@@ -1,0 +1,13 @@
+{
+  "name": "canvas2d-test",
+  "version": "1.0.0",
+  "description": "Deterministic Canvas 2D motion graphics renderer",
+  "main": "src/render.js",
+  "type": "module",
+  "scripts": {
+    "render": "node src/render.js"
+  },
+  "dependencies": {
+    "playwright": "^1.42.1"
+  }
+}
