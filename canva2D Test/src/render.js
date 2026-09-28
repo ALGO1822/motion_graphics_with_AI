@@ -36,7 +36,10 @@ async function renderFrames() {
     const browser = await chromium.launch({
         args: ['--allow-file-access-from-files']
     });
-    const page = await browser.newPage();
+    const page = await browser.newPage({
+        viewport: { width: 1920, height: 1080 },
+        deviceScaleFactor: 1
+    });
     
     const indexPath = path.join(projectRoot, 'index.html');
     const fileUrl = `file:///${indexPath.replace(/\\/g, '/')}`;
@@ -51,6 +54,21 @@ async function renderFrames() {
     const totalFrames = config.fps * config.durationInSeconds;
     console.log(`Rendering ${totalFrames} frames...`);
 
+    // Verify canvas dimensions match viewport
+    const canvasDims = await page.evaluate(() => {
+        const c = document.getElementById('stage');
+        const rect = c.getBoundingClientRect();
+        return {
+            canvasWidth: c.width,
+            canvasHeight: c.height,
+            boundingX: rect.x,
+            boundingY: rect.y,
+            boundingWidth: rect.width,
+            boundingHeight: rect.height
+        };
+    });
+    console.log('Canvas Dimensions:', canvasDims);
+
     const canvasElement = await page.$('#stage');
 
     for (let frame = 0; frame < totalFrames; frame++) {
@@ -58,12 +76,11 @@ async function renderFrames() {
         await page.evaluate((f) => window.renderFrame(f), frame);
         
         // Wait for the next animation frame to ensure the canvas has actually updated on screen
-        // In Playwright, evaluating JavaScript is usually synchronous, but to be safe and let the browser composite:
         await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
 
-        // Capture screenshot of the canvas
+        // Capture screenshot of the canvas element
         const framePath = path.join(FRAMES_DIR, `frame_${frame.toString().padStart(5, '0')}.png`);
-        await canvasElement.screenshot({ path: framePath, omitBackground: true });
+        await canvasElement.screenshot({ path: framePath });
         
         if (frame % 10 === 0) {
             console.log(`Rendered frame ${frame}/${totalFrames}`);

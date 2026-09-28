@@ -1,4 +1,3 @@
-// Deterministic PRNG
 export class PRNG {
     constructor(seed) {
         this.seed = seed;
@@ -12,35 +11,6 @@ export class PRNG {
     }
 }
 
-// Global PRNG for setup
-export const random = new PRNG(42);
-
-// Vector Math
-export class Vec2 {
-    constructor(x, y) {
-        this.x = x;
-        this.y = y;
-    }
-    add(v) { return new Vec2(this.x + v.x, this.y + v.y); }
-    sub(v) { return new Vec2(this.x - v.x, this.y - v.y); }
-    mult(n) { return new Vec2(this.x * n, this.y * n); }
-    div(n) { return new Vec2(this.x / n, this.y / n); }
-    mag() { return Math.sqrt(this.x * this.x + this.y * this.y); }
-    normalize() {
-        const m = this.mag();
-        return m === 0 ? new Vec2(0, 0) : this.div(m);
-    }
-    dist(v) {
-        const dx = this.x - v.x;
-        const dy = this.y - v.y;
-        return Math.sqrt(dx * dx + dy * dy);
-    }
-    lerp(v, t) {
-        return new Vec2(this.x + (v.x - this.x) * t, this.y + (v.y - this.y) * t);
-    }
-}
-
-// Easings
 export const Easing = {
     linear: t => t,
     easeInQuad: t => t * t,
@@ -49,37 +19,111 @@ export const Easing = {
     easeOutCubic: t => (--t) * t * t + 1,
     easeInOutCubic: t => t < .5 ? 4 * t * t * t : (t - 1) * (2 * t - 2) * (2 * t - 2) + 1,
     easeOutExpo: t => t === 1 ? 1 : 1 - Math.pow(2, -10 * t),
-    easeOutElastic: t => {
-        const c4 = (2 * Math.PI) / 3;
-        return t === 0 ? 0 : t === 1 ? 1 : Math.pow(2, -10 * t) * Math.sin((t * 10 - 0.75) * c4) + 1;
+    easeInOutExpo: t => {
+        if (t === 0) return 0;
+        if (t === 1) return 1;
+        if ((t /= 0.5) < 1) return 0.5 * Math.pow(2, 10 * (t - 1));
+        return 0.5 * (-Math.pow(2, -10 * --t) + 2);
+    },
+    easeOutBack: t => {
+        const c1 = 1.70158;
+        const c3 = c1 + 1;
+        return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
+    },
+    easeInOutBack: t => {
+        const c1 = 1.70158;
+        const c2 = c1 * 1.525;
+        return t < 0.5
+          ? (Math.pow(2 * t, 2) * ((c2 + 1) * 2 * t - c2)) / 2
+          : (Math.pow(2 * t - 2, 2) * ((c2 + 1) * (t * 2 - 2) + c2) + 2) / 2;
     }
 };
 
-// Simple Value Noise 2D
-const p = new Uint8Array(512);
-for (let i = 0; i < 256; i++) p[i] = Math.floor(random.range(0, 256));
-for (let i = 0; i < 256; i++) p[256 + i] = p[i];
-
-function fade(t) { return t * t * t * (t * (t * 6 - 15) + 10); }
-function lerp(t, a, b) { return a + t * (b - a); }
-function grad(hash, x, y) {
-    const h = hash & 15;
-    const u = h < 8 ? x : y;
-    const v = h < 4 ? y : h === 12 || h === 14 ? x : 0;
-    return ((h & 1) === 0 ? u : -u) + ((h & 2) === 0 ? v : -v);
+/**
+ * Functional timeline interpolator
+ */
+export function track(time, startT, duration, startV, endV, easing = Easing.easeInOutCubic) {
+    if (time <= startT) return startV;
+    if (time >= startT + duration) return endV;
+    const p = (time - startT) / duration;
+    return startV + (endV - startV) * easing(p);
 }
 
-export function noise2D(x, y) {
-    const X = Math.floor(x) & 255;
-    const Y = Math.floor(y) & 255;
-    x -= Math.floor(x);
-    y -= Math.floor(y);
-    const u = fade(x);
-    const v = fade(y);
-    const A = p[X] + Y;
-    const B = p[X + 1] + Y;
-    return lerp(v, 
-        lerp(u, grad(p[A], x, y), grad(p[B], x - 1, y)),
-        lerp(u, grad(p[A + 1], x, y - 1), grad(p[B + 1], x - 1, y - 1))
-    );
+/**
+ * Keyframe interpolator
+ * frames: [{t: 0, v: 0}, {t: 1, v: 100, e: Easing.easeOutCubic}]
+ */
+export function keyframes(time, frames) {
+    if (frames.length === 0) return 0;
+    if (frames.length === 1 || time <= frames[0].t) return frames[0].v;
+    
+    for (let i = 0; i < frames.length - 1; i++) {
+        const f1 = frames[i];
+        const f2 = frames[i+1];
+        if (time >= f1.t && time < f2.t) {
+            const duration = f2.t - f1.t;
+            const p = (time - f1.t) / duration;
+            const ease = f2.e || Easing.easeInOutCubic;
+            return f1.v + (f2.v - f1.v) * ease(p);
+        }
+    }
+    return frames[frames.length - 1].v;
 }
+
+export function drawRect(ctx, x, y, w, h, color, rotation = 0, pivotX = 0, pivotY = 0) {
+    ctx.save();
+    ctx.translate(x + pivotX, y + pivotY);
+    ctx.rotate(rotation);
+    ctx.fillStyle = color;
+    ctx.fillRect(-pivotX, -pivotY, w, h);
+    ctx.restore();
+}
+
+export function drawLine(ctx, x1, y1, x2, y2, color, width = 1) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = width;
+    ctx.stroke();
+    ctx.restore();
+}
+
+export function drawText(ctx, text, x, y, font, color, align = 'left', baseline = 'top', tracking = 0) {
+    ctx.save();
+    ctx.font = font;
+    ctx.fillStyle = color;
+    ctx.textAlign = tracking > 0 ? 'left' : align;
+    ctx.textBaseline = baseline;
+    
+    if (tracking > 0) {
+        let currentX = x;
+        if (align === 'center') {
+            const totalWidth = ctx.measureText(text).width + (text.length - 1) * tracking;
+            currentX = x - totalWidth / 2;
+        } else if (align === 'right') {
+            const totalWidth = ctx.measureText(text).width + (text.length - 1) * tracking;
+            currentX = x - totalWidth;
+        }
+        
+        for (let i = 0; i < text.length; i++) {
+            const char = text[i];
+            ctx.fillText(char, currentX, y);
+            currentX += ctx.measureText(char).width + tracking;
+        }
+    } else {
+        ctx.fillText(text, x, y);
+    }
+    
+    ctx.restore();
+}
+
+export const Colors = {
+    bg: '#1C1B1A',
+    orange: '#D95A2B',
+    warmGray: '#7A7673',
+    lightWarmGray: '#C4C2C0',
+    offWhite: '#F2F0EB',
+    black: '#0A0A0A'
+};
