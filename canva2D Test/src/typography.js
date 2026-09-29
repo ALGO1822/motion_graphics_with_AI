@@ -129,14 +129,20 @@ export function drawSliced(ctx, sourceCanvas, x, y, w, h, slices, isVertical, of
         for (let i = 0; i < slices; i++) {
             const sx = i * sliceW;
             const offset = offsetFunc(i, slices, sx);
-            // offset has { dx, dy, opacity, scaleY } etc.
             ctx.save();
             ctx.globalAlpha = offset.opacity !== undefined ? offset.opacity : 1;
-            ctx.translate(x + sx + (offset.dx || 0), y + (offset.dy || 0));
-            if (offset.scaleY !== undefined) {
-                ctx.scale(1, offset.scaleY);
-            }
-            ctx.drawImage(sourceCanvas, sx, 0, sliceW, h, 0, 0, sliceW, h);
+            
+            // Translate to the center of the slice to apply scaling properly
+            const cx = x + sx + sliceW / 2 + (offset.dx || 0);
+            const cy = y + h / 2 + (offset.dy || 0);
+            ctx.translate(cx, cy);
+            
+            const scaleX = offset.scaleX !== undefined ? offset.scaleX : 1;
+            const scaleY = offset.scaleY !== undefined ? offset.scaleY : 1;
+            ctx.scale(scaleX, scaleY);
+            
+            // Draw image offset by the translation we just did
+            ctx.drawImage(sourceCanvas, sx, 0, sliceW, h, -sliceW / 2, -h / 2, sliceW, h);
             ctx.restore();
         }
     } else {
@@ -146,11 +152,17 @@ export function drawSliced(ctx, sourceCanvas, x, y, w, h, slices, isVertical, of
             const offset = offsetFunc(i, slices, sy);
             ctx.save();
             ctx.globalAlpha = offset.opacity !== undefined ? offset.opacity : 1;
-            ctx.translate(x + (offset.dx || 0), y + sy + (offset.dy || 0));
-            if (offset.scaleX !== undefined) {
-                ctx.scale(offset.scaleX, 1);
-            }
-            ctx.drawImage(sourceCanvas, 0, sy, w, sliceH, 0, 0, w, sliceH);
+            
+            // Translate to center of slice
+            const cx = x + w / 2 + (offset.dx || 0);
+            const cy = y + sy + sliceH / 2 + (offset.dy || 0);
+            ctx.translate(cx, cy);
+            
+            const scaleX = offset.scaleX !== undefined ? offset.scaleX : 1;
+            const scaleY = offset.scaleY !== undefined ? offset.scaleY : 1;
+            ctx.scale(scaleX, scaleY);
+            
+            ctx.drawImage(sourceCanvas, 0, sy, w, sliceH, -w / 2, -sliceH / 2, w, sliceH);
             ctx.restore();
         }
     }

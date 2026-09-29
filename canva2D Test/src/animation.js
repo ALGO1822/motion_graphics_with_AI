@@ -1,345 +1,528 @@
-import { Easing, track, keyframes, clamp, lerp } from './math.js';
-import { Colors, createLayer, drawRect, drawLine } from './graphics.js';
-import { drawKineticWord, drawText, drawSliced } from './typography.js';
+import { Easing, track, clamp, lerp, seededRandom } from './math.js';
+import { Colors, createLayer } from './graphics.js';
 
 const config = { width: 1920, height: 1080, fps: 30, durationInSeconds: 10 };
 window.animationConfig = config;
 
 const W = config.width, H = config.height;
-const CX = W / 2, CY = H / 2;
 const canvas = document.getElementById('stage');
 const ctx = canvas.getContext('2d', { alpha: false });
 canvas.width = W; canvas.height = H;
 
-const FONT_LG = '900 240px "Helvetica Neue", Helvetica, sans-serif';
-const FONT_XL = '900 340px "Helvetica Neue", Helvetica, sans-serif';
+const offscreen = createLayer();
+const sceneA = createLayer();
+const sceneB = createLayer();
+const sceneC = createLayer();
+const sceneD = createLayer();
 
-const buf1 = createLayer();
-const buf2 = createLayer();
+// Pre-generate grain
+const grainTiles = [];
+for(let t = 0; t < 6; t++) {
+    const gc = createLayer(512, 512);
+    const id = gc.ctx.createImageData(512, 512);
+    const d = id.data;
+    let seed = t * 1000;
+    for(let i=0; i<d.length; i+=4) {
+        // Monochrome noise, 3.5% intensity -> approx +/- 9
+        const v = (seededRandom(seed++) - 0.5) * 18; 
+        d[i] = d[i+1] = d[i+2] = 127 + v;
+        d[i+3] = 255;
+    }
+    gc.ctx.putImageData(id, 0, 0);
+    grainTiles.push(gc.canvas);
+}
 
-const STAGGER = {
-    BUILD:   [0, 0.04, 0.08, 0.02, 0.06],
-    SYSTEMS: [0, 0.03, 0.05, 0.02, 0.04, 0.03, 0.06],
-    ITERATE: [0, 0.03, 0.02, 0.04, 0.01, 0.03, 0.05],
-    CREATE:  [0, 0.04, 0.07, 0.02, 0.05, 0.03],
-    FAVOUR:  [0, 0.05, 0.02, 0.07, 0.03, 0.06],
-};
+function drawGrain(targetCtx, frame) {
+    targetCtx.save();
+    targetCtx.globalCompositeOperation = 'overlay';
+    const tile = grainTiles[Math.floor(frame / 2) % 6];
+    for(let y = 0; y < H; y += 512) {
+        for(let x = 0; x < W; x += 512) {
+            targetCtx.drawImage(tile, x, y);
+        }
+    }
+    targetCtx.restore();
+}
 
-window.renderFrame = function(frame) {
-    const t = frame / config.fps;
+function getFont(weight, size, ls) {
+    // scale auto-fit would go here, but prompt says measure display word if > 1680
+    return `${Math.round(weight)} ${size}px Geist`;
+}
 
-    ctx.fillStyle = Colors.bg;
+// Text Reveal Rule (Clip rect, +110% line height up to 0)
+function drawWordMasked(ctx, word, x, y, size, weight, color, ls, progress) {
+    const lineHeight = size * 1.1; // approximate bounds
+    const p = clamp(progress, 0, 1);
+    const offset = (1 - p) * (lineHeight * 1.1);
+    
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(x - 10, y - size, 1920, size + 30); // clip region
+    ctx.clip();
+    
+    ctx.font = getFont(weight, size);
+    ctx.letterSpacing = ls;
+    ctx.fillStyle = color;
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillText(word, x, Math.round(y + offset));
+    ctx.restore();
+    return ctx.measureText(word).width;
+}
+
+function drawLineMasked(ctx, line, x, y, size, weight, color, ls, startFrame, frame, stagger) {
+    ctx.font = getFont(weight, size);
+    ctx.letterSpacing = ls;
+    const words = line.split(' ');
+    let currentX = x;
+    for (let i = 0; i < words.length; i++) {
+        const word = words[i] + ' ';
+        const wP = track(frame, startFrame + (i * stagger), 16, 0, 1, Easing.E_IN);
+        // We draw word by word, applying the same mask logic but horizontally placed
+        const ww = drawWordMasked(ctx, words[i], currentX, y, size, weight, color, ls, wP);
+        currentX += ww + ctx.measureText(' ').width; // space
+    }
+}
+
+function roundedRect(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+}
+
+function renderSceneA(ctx, f) {
+    ctx.fillStyle = Colors.PAPER;
     ctx.fillRect(0, 0, W, H);
-    buf1.ctx.clearRect(0, 0, W, H);
-    buf2.ctx.clearRect(0, 0, W, H);
-
-    // ================================================================
-    //  PHASE 1 — BUILD (0.0 – 1.5s) | Dynamic Pacing: Fast Snap, Long Hold
-    //  Semantic Motion: Text literally constructs block-by-block from bottom up.
-    // ================================================================
-    if (t < 1.5) {
-        // Base charcoal foundation
-        const foundProg = track(t, 0.1, 0.4, 0, 1, Easing.easeOutExpo);
-        const lw = lerp(0, 820, foundProg);
-        drawRect(ctx, CX - lw/2, CY + 140, lw, 10, Colors.charcoal);
-
-        buf1.ctx.save();
-        drawKineticWord(buf1.ctx, "BUILD", CX, CY, FONT_LG, Colors.grey, 'center', 'middle', 18, (ch, i) => {
-            const d = STAGGER.BUILD[i];
-            const p = track(t, 0.3 + d, 0.5, 0, 1, Easing.spring);
-            const ty = lerp(150, 0, clamp(p, 0, 1));
-            // Stack up from bottom (clipping mask trick applied via drawSliced logic or just scaleY)
-            // But we want it to feel constructed block by block. We use scaleY from the bottom.
-            return { ty, scaleY: p }; // simple but effective construct from bottom
-        });
-        
-        // Draw into bounding box
-        if (lw > 0) {
-            ctx.save();
-            ctx.beginPath();
-            ctx.rect(CX - 410, CY - 150, 820, 290);
-            ctx.clip();
-            ctx.drawImage(buf1.canvas, 0, 0);
-            ctx.restore();
-        }
+    
+    // "15" -> "19"
+    // f0: already 40% risen
+    const p15 = track(f, -14, 36, 0, 1, Easing.E_IN); // reaches 1 at f22
+    const w15 = lerp(200, 800, p15);
+    
+    // Odometer 5 -> 9
+    ctx.save();
+    ctx.font = getFont(w15, 560);
+    ctx.letterSpacing = '-0.04em';
+    ctx.fillStyle = Colors.INK;
+    ctx.textBaseline = 'alphabetic';
+    
+    const xBase = 120;
+    const yBase = 640;
+    
+    // Draw "1"
+    const offset15 = (1 - p15) * (560 * 1.1 * 1.1);
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(xBase - 20, yBase - 560, 400, 600);
+    ctx.clip();
+    ctx.fillText("1", xBase, Math.round(yBase + offset15));
+    ctx.restore();
+    
+    // Draw Odometer slot
+    const w1 = ctx.measureText("1").width;
+    const xOdo = xBase + w1;
+    
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(xOdo - 10, yBase - 560, 400, 620);
+    ctx.clip();
+    
+    const odoP = track(f, 24, 20, 0, 1, Easing.E_PUSH);
+    const yOdo = Math.round(yBase + offset15 + (odoP * 560 * 4)); // Shift up by 4 numbers
+    
+    // Draw 9, 8, 7, 6, 5 (bottom to top visually? No, 5 to 9 so 9 is at bottom)
+    for(let i=0; i<=4; i++) {
+        ctx.fillText((9 - i).toString(), xOdo, yOdo - (4-i)*560);
     }
-
-    // ================================================================
-    //  PHASE 2 — SYSTEMS (1.5 – 2.8s) | Whip & Semantic Grid
-    //  Anticipation: Screen winds up slightly positive before whipping -90.
-    //  Overlapping Exits: BUILD slices delay their exit based on index.
-    // ================================================================
-    if (t >= 1.5 && t < 2.8) {
-        // 1. Anticipation + Whip rotation
-        const rotProg = track(t, 1.5, 1.0, 0, 1, Easing.tensionInOut); 
-        // Maps 0->1 using tensionInOut. At early t, it goes negative (positive degrees).
-        const globalRot = lerp(0, -Math.PI / 2, rotProg);
-
-        ctx.save();
-        ctx.translate(CX, CY);
-        ctx.rotate(globalRot);
-        ctx.translate(-CX, -CY);
-
-        // Outgoing BUILD with Overlapping Exit action
-        if (rotProg < 1) {
-            buf1.ctx.clearRect(0, 0, W, H);
-            drawRect(buf1.ctx, CX - 410, CY - 145, 820, 290, Colors.charcoal);
-            drawText(buf1.ctx, "BUILD", CX, CY, FONT_LG, Colors.grey, 'center', 'middle', 18);
-
-            drawSliced(ctx, buf1.canvas, 0, 0, W, H, 8, false, (i, total) => {
-                const exitDelay = i * 0.05;
-                const exitProg = clamp((rotProg * 1.5) - exitDelay, 0, 1);
-                const dir = (i % 2 === 0) ? 1 : -1;
-                // Exits with extreme exponent
-                const dx = dir * Math.pow(exitProg, 5) * W;
-                return { dx };
-            });
-        }
-
-        // Incoming SYSTEMS with Semantic Grids
-        const revealProg = track(t, 1.9, 0.7, 0, 1, Easing.easeOutExpo);
-        if (revealProg > 0) {
-            ctx.save();
-            ctx.translate(CX, CY);
-            ctx.rotate(Math.PI / 2); // Counter rotate to stay visually upright
-            
-            // Draw Semantic Interlocking Grid
-            ctx.globalAlpha = revealProg * 0.2;
-            for (let i = -10; i <= 10; i++) {
-                const off = (t * 100) % 50; // Constant motion
-                drawLine(ctx, -W, i * 50 + off, W, i * 50 + off, Colors.charcoal, 1);
-                drawLine(ctx, i * 50 - off, -H, i * 50 - off, H, Colors.charcoal, 1);
-            }
-            ctx.globalAlpha = 1;
-            
-            drawKineticWord(ctx, "SYSTEMS", 0, 0, FONT_LG, Colors.darkGrey, 'center', 'middle', 12, (ch, i) => {
-                const d = STAGGER.SYSTEMS[i];
-                const p = track(t, 2.0 + d, 0.5, 0, 1, Easing.spring);
-                const dir = (i % 2 === 0) ? 1 : -1;
-                const ty = lerp(dir * 200, 0, clamp(p, 0, 1));
-                return { ty };
-            });
-            ctx.restore();
-        }
-        ctx.restore();
+    ctx.restore();
+    ctx.restore();
+    
+    // Captions
+    const cap1P = track(f, 4, 16, 0, 1, Easing.E_IN);
+    const cap1Exit = track(f, 30, 16, 0, 1, Easing.E_PUSH);
+    const cap2P = track(f, 38, 16, 0, 1, Easing.E_IN);
+    
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(120, 760 - 60, 1000, 80);
+    ctx.clip();
+    
+    if (cap1Exit < 1) {
+        const yLine1 = 760 - (cap1Exit * 56 * 1.1);
+        drawLineMasked(ctx, "Started university.", 120, Math.round(yLine1), 56, 400, Colors.SLATE_ON_PAPER, '0em', 4, f, 2);
     }
-
-    // ================================================================
-    //  PHASE 3 — ITERATE (2.8 – 4.1s) | Semantic Loop & Echo
-    //  SYSTEMS compresses, opens for ITERATE. ITERATE creates concentric echos.
-    // ================================================================
-    if (t >= 2.8 && t < 4.1) {
-        const compress = track(t, 2.8, 0.4, 0, 1, Easing.easeInOutQuint);
-        const rotate = track(t, 3.1, 0.3, 0, 1, Easing.easeInOutExpo);
-        const expand = track(t, 3.3, 0.4, 0, 1, Easing.easeOutBack);
-        
-        // SYSTEMS compressing
-        if (compress < 1 || (compress >= 1 && rotate < 1)) {
-            drawKineticWord(ctx, "SYSTEMS", CX, CY, FONT_LG, Colors.darkGrey, 'center', 'middle', 12, (ch, i, cx, cy) => {
-                const localP = clamp((compress - STAGGER.SYSTEMS[i]) * 1.5, 0, 1);
-                const scaleX = lerp(1, 0.02, localP);
-                const scaleY = lerp(1, 3.5, localP);
-                const tx = lerp(0, CX + (i - 3) * 20 - cx, localP);
-                const rot = rotate * (Math.PI / 2);
-                return { tx, scaleX, scaleY, rot };
-            });
-        }
-
-        // Charcoal structure
-        if (rotate >= 0.5) {
-            const maskW = lerp(140, 1300, expand);
-            const maskH = lerp(30, 320, expand);
-            ctx.save();
-            ctx.translate(CX, CY);
-            drawRect(ctx, -maskW/2, -maskH/2, maskW, maskH, Colors.charcoal);
-            ctx.beginPath();
-            ctx.rect(-maskW/2, -maskH/2, maskW, maskH);
-            ctx.clip();
-
-            if (t > 3.4) {
-                // Semantic Echo effect: ITERATE spawns larger outline copies of itself
-                const echoProg = track(t, 3.6, 0.5, 0, 1, Easing.easeOutExpo);
-                
-                // Draw Echos first (behind)
-                if (echoProg > 0) {
-                    ctx.save();
-                    ctx.strokeStyle = Colors.grey;
-                    ctx.lineWidth = 2;
-                    for (let e = 1; e <= 3; e++) {
-                        const s = 1 + (e * echoProg * 0.3);
-                        const a = (1 - echoProg) * (0.6 / e);
-                        ctx.save();
-                        ctx.scale(s, s);
-                        ctx.globalAlpha = Math.max(0, a);
-                        // Just stroke it
-                        ctx.font = FONT_LG;
-                        ctx.textBaseline = 'middle';
-                        ctx.textAlign = 'center';
-                        ctx.strokeText("ITERATE", 0, 0); // Simplified for echo
-                        ctx.restore();
-                    }
-                    ctx.restore();
-                }
-
-                // Core ITERATE
-                drawKineticWord(ctx, "ITERATE", 0, 0, FONT_LG, Colors.grey, 'center', 'middle', 8, (ch, i) => {
-                    const p = track(t, 3.4 + STAGGER.ITERATE[i], 0.4, 0, 1, Easing.spring);
-                    const ty = lerp(200, 0, clamp(p, 0, 1));
-                    return { ty };
-                });
-            }
-            ctx.restore();
-        }
+    
+    if (cap2P > 0) {
+        drawLineMasked(ctx, "Graduating this October.", 120, 760, 56, 400, Colors.SLATE_ON_PAPER, '0em', 38, f, 2);
     }
+    ctx.restore();
+}
 
-    // ================================================================
-    //  PHASE 4 — CREATE (4.1 – 7.0s) | The Geometric Drafting Bridge
-    //  ITERATE squeezed. Massive slow drafting of CREATE (Pacing tension).
-    // ================================================================
-    if (t >= 4.1 && t < 7.0) {
-        const squeeze = track(t, 4.1, 0.4, 0, 1, Easing.easeInOutQuint);
-        const expand  = track(t, 4.5, 0.4, 0, 1, Easing.easeInOutExpo);
-        
-        const maskW = keyframes(t, [
-            { t: 4.1, v: 1300 },
-            { t: 4.5, v: 1300 },
-            { t: 4.9, v: W + 100, e: Easing.easeInOutExpo }
-        ]);
-        const maskH = keyframes(t, [
-            { t: 4.1, v: 320 },
-            { t: 4.5, v: 2, e: Easing.easeInOutQuint },
-            { t: 4.9, v: H + 100, e: Easing.easeInOutExpo }
-        ]);
-
-        ctx.save();
-        ctx.translate(CX, CY);
-        drawRect(ctx, -maskW/2, -maskH/2, maskW, maskH, Colors.charcoal);
-        
-        ctx.beginPath();
-        ctx.rect(-maskW/2, -maskH/2, maskW, maskH);
-        ctx.clip();
-        
-        if (squeeze < 1) {
-            drawKineticWord(ctx, "ITERATE", 0, 0, FONT_LG, Colors.grey, 'center', 'middle', 8, (ch, i) => {
-                const scaleY = lerp(1, 0, squeeze);
-                return { scaleY };
-            });
-        }
-        ctx.restore();
-
-        if (expand > 0) {
-            const createText = "CREATE";
-            const trackingAmt = 15;
+function renderSceneB(ctx, f) {
+    ctx.fillStyle = Colors.INK;
+    ctx.fillRect(0, 0, W, H);
+    
+    // "Allocadia"
+    const pAllo = track(f, 74, 26, 0, 1, Easing.E_IN);
+    const wAllo = lerp(200, 700, pAllo);
+    drawWordMasked(ctx, "Allocadia", 120, 400, 260, wAllo, Colors.PAPER, '-0.04em', pAllo);
+    
+    // Description
+    drawLineMasked(ctx, "Assigns hostel rooms by solving", 120, 490, 56, 400, Colors.PAPER, '0em', 86, f, 2);
+    drawLineMasked(ctx, "for everyone's preferences at once.", 120, 556, 56, 400, Colors.PAPER, '0em', 90, f, 2);
+    
+    // Caption
+    drawLineMasked(ctx, "Go, Next.js, Python, PostgreSQL", 1240, 490, 36, 500, Colors.SLATE_ON_INK, '0em', 92, f, 2);
+    
+    // Room grid
+    ctx.save();
+    for (let c = 0; c < 28; c++) {
+        for (let r = 0; r < 5; r++) {
+            const startF = 92 + (c * 0.5);
+            const pGrid = track(f, startF, 20, 0, 1, Easing.E_IN);
+            const pSweep = track(f, 112 + (c / 28) * 16, 1, 0, 1, Easing.linear); // Hard flip
             
-            ctx.save();
-            ctx.font = FONT_XL;
-            ctx.textBaseline = 'middle';
-            ctx.textAlign = 'center';
-            
-            let totalWidth = 0;
-            let charWidths = [];
-            for (let i = 0; i < createText.length; i++) {
-                const cw = ctx.measureText(createText[i]).width;
-                charWidths.push(cw);
-                totalWidth += cw;
-            }
-            totalWidth += (createText.length - 1) * trackingAmt;
-            
-            let currentX = CX - totalWidth / 2;
-            for (let i = 0; i < createText.length; i++) {
-                const char = createText[i];
-                const cx = currentX + charWidths[i] / 2;
+            if (pGrid > 0) {
+                const seed = c * 100 + r;
+                const rOffX = (seededRandom(seed) - 0.5) * 80;
+                const rOffY = (seededRandom(seed+1) - 0.5) * 80;
+                const rRot = (seededRandom(seed+2) - 0.5) * 50 * (Math.PI/180);
                 
-                // Slow, deliberate drafting
-                const outline = track(t, 4.8 + i * 0.15, 0.8, 0, 1, Easing.easeOutQuart);
-                const fill = track(t, 5.5 + i * 0.15, 0.8, 0, 1, Easing.easeOutQuad);
+                const curX = lerp(120 + c * 60 + rOffX, 120 + c * 60, pGrid);
+                const curY = lerp(680 + r * 60 + rOffY, 680 + r * 60, pGrid);
+                const curRot = lerp(rRot, 0, pGrid);
                 
-                if (outline > 0) {
-                    ctx.save();
-                    ctx.strokeStyle = Colors.grey;
-                    ctx.lineWidth = 4;
-                    ctx.lineCap = 'round';
-                    ctx.lineJoin = 'round';
-                    const pathLen = 3000;
-                    ctx.setLineDash([pathLen]);
-                    ctx.lineDashOffset = pathLen * (1 - outline);
-                    ctx.strokeText(char, cx, CY);
-                    ctx.restore();
-                }
-                
-                if (fill > 0) {
-                    ctx.save();
-                    ctx.fillStyle = Colors.grey;
-                    ctx.globalAlpha = fill;
-                    ctx.fillText(char, cx, CY);
-                    ctx.restore();
-                }
-                currentX += charWidths[i] + trackingAmt;
-            }
-            ctx.restore();
-        }
-    }
-
-    // ================================================================
-    //  PHASE 5/6 — FAVOUR (7.0 – 10.0s) | The Finale
-    //  Overlapping Exits: The charcoal screen and CREATE shatter sequentially.
-    // ================================================================
-    if (t >= 7.0) {
-        // Cascade slice & spin out of CREATE
-        const shatterBase = track(t, 7.0, 1.2, 0, 1, Easing.easeOutExpo);
-        const morph = track(t, 7.7, 0.6, 0, 1, Easing.easeInExpo);
-        const frameExpand = track(t, 8.3, 0.7, 0, 1, Easing.easeOutBackStrong);
-
-        // Draw exact end state of Phase 4 into buf1
-        buf1.ctx.fillStyle = Colors.charcoal;
-        buf1.ctx.fillRect(0, 0, W, H);
-        drawText(buf1.ctx, "CREATE", CX, CY, FONT_XL, Colors.grey, 'center', 'middle', 15);
-
-        if (morph < 1) {
-            // Overlapping shatter exits!
-            drawSliced(ctx, buf1.canvas, 0, 0, W, H, 36, true, (i, total) => {
-                const distFromCenter = Math.abs((total / 2) - i) / (total / 2);
-                const delay = distFromCenter * 0.3; // Edge pieces shatter later (or earlier)
-                
-                // Actual progress for this specific slice
-                const sliceProg = clamp((shatterBase - delay) * 1.5, 0, 1);
-                
-                // 1. Shards spin 90 degrees
-                const localSpinX = lerp(1, 0, sliceProg);
-                
-                // 2. Collapse to center as morph hits
-                const sliceCenter = i * (W / total) + (W / total / 2);
-                const dx = lerp(0, CX - sliceCenter, morph);
-                
-                return { dx, scaleX: localSpinX };
-            });
-        }
-        
-        if (morph > 0.8) {
-            const frameW = lerp(50, 1600, clamp(frameExpand, 0, 1));
-            const frameH = lerp(50, 780, clamp(frameExpand, 0, 1));
-
-            ctx.strokeStyle = Colors.charcoal;
-            ctx.lineWidth = 8;
-            ctx.strokeRect(CX - frameW / 2, CY - frameH / 2, frameW, frameH);
-
-            if (frameExpand > 0.2) {
-                buf2.ctx.clearRect(0, 0, W, H);
-                drawKineticWord(buf2.ctx, "FAVOUR", CX, CY, FONT_LG, Colors.darkGrey, 'center', 'middle', 35, (ch, i) => {
-                    const d = STAGGER.FAVOUR[i];
-                    const p = track(t, 8.5 + d, 0.7, 0, 1, Easing.spring);
-                    const ty = lerp(450, 0, clamp(p, -0.2, 1));
-                    const rot = lerp(Math.PI/4, 0, clamp(p, -0.2, 1));
-                    return { ty, rot };
-                });
-
                 ctx.save();
-                ctx.beginPath();
-                ctx.rect(CX - frameW / 2, CY - frameH / 2, frameW, frameH);
-                ctx.clip();
-                ctx.drawImage(buf2.canvas, 0, 0);
+                ctx.translate(curX + 14, curY + 14);
+                ctx.rotate(curRot);
+                ctx.globalAlpha = pGrid;
+                
+                if (pSweep > 0.5) {
+                    ctx.fillStyle = Colors.PAPER;
+                    ctx.fillRect(-14, -14, 28, 28);
+                } else {
+                    ctx.strokeStyle = Colors.PAPER;
+                    ctx.lineWidth = 2;
+                    ctx.strokeRect(-14, -14, 28, 28);
+                }
                 ctx.restore();
             }
         }
     }
+    ctx.restore();
+}
+
+function renderSceneC(ctx, f) {
+    ctx.fillStyle = Colors.COBALT;
+    ctx.fillRect(0, 0, W, H);
+    
+    // "Nota"
+    const pNota = track(f, 146, 26, 0, 1, Easing.E_IN);
+    const wNota = lerp(200, 800, pNota);
+    drawWordMasked(ctx, "Nota", 120, 560, 440, wNota, Colors.PAPER, '-0.04em', pNota);
+    
+    drawLineMasked(ctx, "Turns any PDF into diagrams", 120, 640, 56, 400, Colors.PAPER, '0em', 158, f, 2);
+    drawLineMasked(ctx, "you can study.", 120, 706, 56, 400, Colors.PAPER, '0em', 162, f, 2);
+    drawLineMasked(ctx, "Built with Flutter", 120, 800, 36, 500, Colors.PAPER, '0em', 166, f, 2); // Prompt says "x 120"
+    
+    // Visual Right Side
+    const pTrace = track(f, 160, 10, 0, 1, Easing.linear);
+    const pRetract = track(f, 176, 20, 0, 1, Easing.E_PUSH);
+    
+    const bx = 1240, by = 260, bw = 360, bh = 480;
+    
+    if (pTrace > 0 && pRetract < 1) {
+        ctx.save();
+        ctx.strokeStyle = Colors.PAPER;
+        ctx.lineWidth = 4;
+        const totalPerimeter = (bw + bh) * 2;
+        const currentLen = totalPerimeter * (pTrace - pRetract);
+        ctx.setLineDash([currentLen, 10000]);
+        ctx.lineDashOffset = 0;
+        ctx.strokeRect(bx, by, bw, bh);
+        ctx.restore();
+    }
+    
+    // Bars / Nodes morph
+    const morph = pRetract;
+    
+    const drawNode = (ix, iy, iw, ih, ir, m, cx, cy, cw, ch, cr, o) => {
+        const x = lerp(ix, cx, m);
+        const y = lerp(iy, cy, m);
+        const w = lerp(iw, cw, m);
+        const h = lerp(ih, ch, m);
+        const r = lerp(ir, cr, m);
+        if (h <= 0) return;
+        ctx.save();
+        ctx.fillStyle = Colors.PAPER;
+        ctx.globalAlpha = 1 - o;
+        roundedRect(ctx, x, y, w, h, r);
+        ctx.fill();
+        ctx.restore();
+    };
+    
+    const bars = [
+        { y: by + 60, w: 240, x: bx + 60 },
+        { y: by + 100, w: 200, x: bx + 60 },
+        { y: by + 140, w: 220, x: bx + 60 },
+        { y: by + 200, w: 180, x: bx + 60 },
+        { y: by + 240, w: 260, x: bx + 60 },
+        { y: by + 280, w: 140, x: bx + 60 },
+    ];
+    
+    for (let i = 0; i < 6; i++) {
+        const barP = track(f, 166 + i*1.5, 8, 0, 1, Easing.E_IN);
+        if (barP > 0) {
+            const ix = bars[i].x, iy = bars[i].y, iw = bars[i].w * barP, ih = 14;
+            if (i === 0) {
+                // Root node (center 1420,360, radius 40)
+                drawNode(ix, iy, iw, ih, 7, morph, 1380, 320, 80, 80, 40, 0);
+            } else if (i === 3) {
+                // Child 1 (1320,620)
+                drawNode(ix, iy, iw, ih, 7, morph, 1260, 580, 120, 80, 20, 0);
+            } else if (i === 4) {
+                // Child 2 (1520,620)
+                drawNode(ix, iy, iw, ih, 7, morph, 1460, 580, 120, 80, 20, 0);
+            } else {
+                // Vanish
+                drawNode(ix, iy, iw, ih, 7, morph, ix, iy + ih/2, iw, 0, 0, morph);
+            }
+        }
+    }
+    
+    // Edges
+    const edgeP = track(f, 192, 12, 0, 1, Easing.E_PUSH);
+    if (edgeP > 0) {
+        ctx.save();
+        ctx.strokeStyle = Colors.PAPER;
+        ctx.lineWidth = 4;
+        
+        ctx.beginPath();
+        ctx.moveTo(1420, 400);
+        ctx.lineTo(1420 + (1320-1420)*edgeP, 400 + (580-400)*edgeP);
+        ctx.stroke();
+        
+        ctx.beginPath();
+        ctx.moveTo(1420, 400);
+        ctx.lineTo(1420 + (1520-1420)*edgeP, 400 + (580-400)*edgeP);
+        ctx.stroke();
+        
+        ctx.restore();
+    }
+}
+
+function renderSceneD(ctx, f) {
+    ctx.fillStyle = Colors.PAPER;
+    ctx.fillRect(0, 0, W, H);
+    
+    const pFav = track(f, 222, 28, 0, 1, Easing.E_IN);
+    const wFav = lerp(200, 800, pFav);
+    drawWordMasked(ctx, "Favour", 120, 560, 400, wFav, Colors.INK, '-0.04em', pFav);
+    
+    drawLineMasked(ctx, "I build things end to end.", 120, 680, 64, 400, Colors.INK, '0em', 238, f, 2);
+    
+    const urlP = track(f, 246, 12, 0, 1, Easing.E_IN);
+    drawWordMasked(ctx, "devfavour.vercel.app", 120, 780, 44, 400, Colors.COBALT, '0em', urlP);
+    
+    const lineP = track(f, 254, 16, 0, 1, Easing.E_PUSH);
+    if (lineP > 0) {
+        ctx.fillStyle = Colors.COBALT;
+        ctx.fillRect(120, 796, 440 * lineP, 3);
+    }
+}
+
+function drawHUD(ctx, frame, fieldName, clipFunc) {
+    ctx.save();
+    clipFunc();
+    
+    // Progress line: 3 px horizontal line at y=64, x=120 to 1800
+    // Fills left to right linearly over 300 frames
+    const p = frame / 299;
+    const endX = lerp(120, 1800, p);
+    
+    let color = Colors.INK; // Scene A
+    if (fieldName === 'B') color = Colors.PAPER;
+    if (fieldName === 'C') color = Colors.PAPER;
+    if (fieldName === 'D') color = Colors.INK;
+    
+    // Track (20%)
+    ctx.fillStyle = color;
+    ctx.globalAlpha = 0.2;
+    ctx.fillRect(120, 64, 1680, 3);
+    
+    // Fill
+    ctx.globalAlpha = 1.0;
+    ctx.fillRect(120, 64, endX - 120, 3);
+    
+    ctx.restore();
+}
+
+function renderFrameAtTime(f, targetCtx) {
+    // Render individual scenes
+    renderSceneA(sceneA.ctx, f);
+    renderSceneB(sceneB.ctx, f);
+    renderSceneC(sceneC.ctx, f);
+    renderSceneD(sceneD.ctx, f);
+    
+    targetCtx.fillStyle = '#000';
+    targetCtx.fillRect(0, 0, W, H);
+    
+    // Base layout & Transitions
+    // T1: PUSH LEFT (f66-f88)
+    const t1P = track(f, 66, 22, 0, 1, Easing.E_PUSH);
+    // T2: PUSH UP (f138-f160)
+    const t2P = track(f, 138, 22, 0, 1, Easing.E_PUSH);
+    // T3: CIRCLE MATCH CUT (f208-f236)
+    const t3P = track(f, 208, 28, 0, 1, Easing.E_PUSH);
+    
+    if (f < 138) {
+        // Scene A & B
+        const edgeX = lerp(1920, 0, t1P);
+        
+        // Scene A (Outgoing)
+        targetCtx.save();
+        targetCtx.beginPath();
+        targetCtx.rect(0, 0, edgeX, H); // Field clip
+        targetCtx.clip();
+        const aOffsetX = -t1P * 1920 * 1.15;
+        targetCtx.drawImage(sceneA.canvas, aOffsetX, 0);
+        
+        drawHUD(targetCtx, f, 'A', () => {
+            targetCtx.beginPath();
+            targetCtx.rect(0, 0, edgeX, H);
+            targetCtx.clip();
+        });
+        targetCtx.restore();
+        
+        // Scene B (Incoming/Current)
+        if (t1P > 0) {
+            targetCtx.save();
+            targetCtx.beginPath();
+            targetCtx.rect(edgeX, 0, W - edgeX, H);
+            targetCtx.clip();
+            const bOffsetX = (1 - t1P) * 1920 * 1.35;
+            targetCtx.drawImage(sceneB.canvas, bOffsetX, 0);
+            
+            drawHUD(targetCtx, f, 'B', () => {
+                targetCtx.beginPath();
+                targetCtx.rect(edgeX, 0, W - edgeX, H);
+                targetCtx.clip();
+            });
+            targetCtx.restore();
+        }
+    } else if (f >= 138 && f < 208) {
+        // Scene B & C
+        const edgeY = lerp(1080, 0, t2P);
+        
+        // Scene B (Outgoing)
+        targetCtx.save();
+        targetCtx.beginPath();
+        targetCtx.rect(0, 0, W, edgeY);
+        targetCtx.clip();
+        const bOffsetY = -t2P * 1080 * 1.2;
+        targetCtx.drawImage(sceneB.canvas, 0, bOffsetY);
+        
+        drawHUD(targetCtx, f, 'B', () => {
+            targetCtx.beginPath();
+            targetCtx.rect(0, 0, W, edgeY);
+            targetCtx.clip();
+        });
+        targetCtx.restore();
+        
+        // Scene C (Incoming/Current)
+        if (t2P > 0) {
+            targetCtx.save();
+            targetCtx.beginPath();
+            targetCtx.rect(0, edgeY, W, H - edgeY);
+            targetCtx.clip();
+            const cOffsetY = (1 - t2P) * 1080 * 1.4;
+            targetCtx.drawImage(sceneC.canvas, 0, cOffsetY);
+            
+            drawHUD(targetCtx, f, 'C', () => {
+                targetCtx.beginPath();
+                targetCtx.rect(0, edgeY, W, H - edgeY);
+                targetCtx.clip();
+            });
+            targetCtx.restore();
+        }
+    } else {
+        // Scene C & D
+        const r = lerp(40, 1700, t3P);
+        
+        // Scene C (Outgoing)
+        targetCtx.save();
+        // C content drifts and scales
+        const cOffsetX = -80 * t3P;
+        const cScale = 1 - 0.04 * t3P;
+        
+        // Draw C masked by the INVERSE of the circle? No, draw C underneath, draw D over it inside the circle
+        targetCtx.translate(W/2, H/2);
+        targetCtx.scale(cScale, cScale);
+        targetCtx.translate(-W/2, -H/2);
+        targetCtx.drawImage(sceneC.canvas, cOffsetX, 0);
+        targetCtx.restore();
+        
+        drawHUD(targetCtx, f, 'C', () => {
+            targetCtx.beginPath();
+            targetCtx.rect(0, 0, W, H);
+            targetCtx.clip();
+            // exclude circle
+            targetCtx.beginPath();
+            targetCtx.arc(1420, 360, r, 0, Math.PI*2);
+            targetCtx.rect(W, 0, -W, H);
+            targetCtx.clip('evenodd');
+        });
+        
+        // Scene D (Incoming inside circle)
+        if (t3P > 0) {
+            targetCtx.save();
+            targetCtx.beginPath();
+            targetCtx.arc(1420, 360, r, 0, Math.PI * 2);
+            targetCtx.clip();
+            
+            const dOffsetX = 120 * (1 - t3P);
+            targetCtx.drawImage(sceneD.canvas, dOffsetX, 0);
+            
+            drawHUD(targetCtx, f, 'D', () => {
+                targetCtx.beginPath();
+                targetCtx.arc(1420, 360, r, 0, Math.PI * 2);
+                targetCtx.clip();
+            });
+            targetCtx.restore();
+        }
+    }
+}
+
+window.renderFrame = function(frame) {
+    // 180-degree shutter motion blur logic
+    const isBlurring = (frame >= 66 && frame <= 88) || 
+                       (frame >= 138 && frame <= 160) || 
+                       (frame >= 208 && frame <= 236) ||
+                       (frame >= 24 && frame <= 44); // Odometer
+                       
+    if (isBlurring) {
+        ctx.fillStyle = '#000';
+        ctx.fillRect(0, 0, W, H);
+        
+        const subframes = 5;
+        // 180 degree shutter means it exposes for half a frame duration
+        // We evaluate f from frame to frame + 0.5
+        for (let s = 0; s < subframes; s++) {
+            const subF = frame + (s / (subframes - 1)) * 0.5;
+            offscreen.ctx.clearRect(0, 0, W, H);
+            renderFrameAtTime(subF, offscreen.ctx);
+            
+            ctx.globalAlpha = 1 / subframes;
+            ctx.drawImage(offscreen.canvas, 0, 0);
+        }
+        ctx.globalAlpha = 1.0;
+    } else {
+        renderFrameAtTime(frame, ctx);
+    }
+    
+    // Add noise OVER the motion blur
+    drawGrain(ctx, frame);
 };

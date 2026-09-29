@@ -25,6 +25,25 @@
     <!-- The canvas element will be configured by the animation logic or the renderer -->
     <canvas id="stage" width="1920" height="1080"></canvas>
     
+    <script>
+        // Load font before animation starts
+        window.fontReady = false;
+        async function loadFonts() {
+            try {
+                const font = new FontFace('Geist', 'url(GeistVF.woff2)', { weight: '100 900' });
+                await font.load();
+                document.fonts.add(font);
+                console.log('Geist font loaded');
+                window.fontReady = true;
+            } catch (err) {
+                console.error('Font loading error:', err);
+                // Fallback to true so we don't hang
+                window.fontReady = true;
+            }
+        }
+        loadFonts();
+    </script>
+
     <!-- Load the animation logic -->
     <script type="module" src="src/animation.js"></script>
 </body>

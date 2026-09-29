@@ -41,11 +41,18 @@ async function renderFrames() {
         deviceScaleFactor: 1
     });
     
+    page.on('console', msg => console.log('PAGE LOG:', msg.text()));
+    page.on('pageerror', err => console.log('PAGE ERROR:', err.message));
+    
     const indexPath = path.join(projectRoot, 'index.html');
     const fileUrl = `file:///${indexPath.replace(/\\/g, '/')}`;
     console.log(`Loading page: ${fileUrl}`);
     
     await page.goto(fileUrl);
+    
+    console.log('Waiting for fonts and animation config to load...');
+    await page.waitForFunction(() => window.fontReady === true && window.animationConfig !== undefined);
+    console.log('Fonts and Config loaded.');
     
     // Get animation configuration
     const config = await page.evaluate(() => window.animationConfig);
@@ -104,10 +111,10 @@ function encodeVideo(fps) {
         // -c:v libx264 : use h264 codec
         // -pix_fmt yuv420p : standard pixel format for mp4 compatibility
         const soundtrackPath = path.join(OUT_DIR, 'soundtrack.wav');
-        let ffmpegCmd = `ffmpeg -y -framerate ${fps} -i "${inputPattern}" -c:v libx264 -pix_fmt yuv420p "${OUTPUT_FILE}"`;
+        let ffmpegCmd = `ffmpeg -y -framerate ${fps} -i "${inputPattern}" -c:v libx264 -pix_fmt yuv420p -crf 14 -colorspace bt709 -color_trc bt709 -color_primaries bt709 -movflags +faststart "${OUTPUT_FILE}"`;
         
         if (fs.existsSync(soundtrackPath)) {
-            ffmpegCmd = `ffmpeg -y -framerate ${fps} -i "${inputPattern}" -i "${soundtrackPath}" -c:v libx264 -pix_fmt yuv420p -c:a aac -shortest "${OUTPUT_FILE}"`;
+            ffmpegCmd = `ffmpeg -y -framerate ${fps} -i "${inputPattern}" -i "${soundtrackPath}" -c:v libx264 -pix_fmt yuv420p -crf 14 -colorspace bt709 -color_trc bt709 -color_primaries bt709 -movflags +faststart -c:a aac -shortest "${OUTPUT_FILE}"`;
         }
         
         console.log(`Executing: ${ffmpegCmd}`);

@@ -1,10 +1,9 @@
 export const Colors = {
-    bg: '#C6532B',          // Burnt Orange (Dominant Background)
-    grey: '#B8B2AA',        // Grey / Warm Light Grey (Primary Typography/Geometry)
-    darkGrey: '#2D2B29',    // Dark Grey for other typography
-    charcoal: '#171717',    // Dark Charcoal (Supporting/Masks)
-    offWhite: '#F1EDE5',    // Off-White (Sparing accents)
-    accent: '#0A0A0A'       // Black (Supporting)
+    PAPER: '#EEF0F3',
+    INK: '#0C1226',
+    COBALT: '#2A3BFF',
+    SLATE_ON_PAPER: '#59627A',
+    SLATE_ON_INK: '#9AA4BC'
 };
 
 export function createLayer(width = 1920, height = 1080) {
