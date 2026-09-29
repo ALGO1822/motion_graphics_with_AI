@@ -1,0 +1,23 @@
+{
+  "fps": 30,
+  "caret": { "on1": 16, "off1": 28, "on2": 32 },
+  "t1": { "shrinkStart": 41, "growthStart": 44, "growthEnd": 62 },
+  "allocadia": { "pulse1": 96, "pulse2": 104, "r6Flip": 128 },
+  "t2": { "shrinkStart": 129, "growthStart": 132, "growthEnd": 150 },
+  "nota": {
+    "bar1": 168, "bar2": 172, "bar3": 176,
+    "node1": 192, "node2": 200, "node3": 208,
+    "arrowsEnd": 212
+  },
+  "t3": {
+    "retractStart": 212, "retractEnd": 216,
+    "wipeStart": 216, "wipeEnd": 224,
+    "shrinkStart": 221, "growthStart": 224, "growthEnd": 242
+  },
+  "signOff": {
+    "tagline": 240,
+    "subline": 248,
+    "url": 252,
+    "underlineStart": 264, "underlineEnd": 280
+  }
+}

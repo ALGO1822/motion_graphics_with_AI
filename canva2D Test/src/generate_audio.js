@@ -10,7 +10,6 @@ const durationSeconds = 10;
 const numSamples = sampleRate * durationSeconds;
 const buffer = new Float32Array(numSamples);
 
-// Simple synthesis functions
 function mixTone(startSec, endSec, freqStart, freqEnd, type = 'sine', volume = 0.5) {
     const startSample = Math.floor(startSec * sampleRate);
     const endSample = Math.floor(endSec * sampleRate);
@@ -32,27 +31,25 @@ function mixTone(startSec, endSec, freqStart, freqEnd, type = 'sine', volume = 0
     }
 }
 
-// 4 tick sounds for Odometer (f24-f44 is 0.8s to 1.46s)
-// 5 to 6, 6 to 7, 7 to 8, 8 to 9 -> 4 ticks
-for(let i=0; i<4; i++) {
-    const t = 0.8 + (i * 0.16);
-    mixTone(t, t + 0.02, 3000, 3000, 'noise', 0.1);
-}
+function tToSec(f) { return f / 30; }
 
-// Low-passed thud at start of T1 (f66 = 2.2s)
-mixTone(2.2, 2.26, 80, 40, 'sine', 0.6);
-// T2 (f138 = 4.6s)
-mixTone(4.6, 4.66, 80, 40, 'sine', 0.6);
-// T3 (f208 = 6.93s)
-mixTone(6.93, 6.99, 80, 40, 'sine', 0.6);
+mixTone(tToSec(44), tToSec(44) + 0.06, 80, 40, 'sine', 0.6);
+mixTone(tToSec(132), tToSec(132) + 0.06, 80, 40, 'sine', 0.6);
+mixTone(tToSec(216), tToSec(216) + 0.06, 80, 40, 'sine', 0.6);
 
-// Normalize
+mixTone(tToSec(18), tToSec(18) + 0.02, 3000, 3000, 'noise', 0.1);
+mixTone(tToSec(34), tToSec(34) + 0.02, 3000, 3000, 'noise', 0.1);
+
+mixTone(tToSec(168), tToSec(168) + 0.02, 3000, 3000, 'noise', 0.1);
+mixTone(tToSec(174), tToSec(174) + 0.02, 3000, 3000, 'noise', 0.1);
+mixTone(tToSec(180), tToSec(180) + 0.02, 3000, 3000, 'noise', 0.1);
+
+
 let maxAmp = 0.001;
 for (let i=0; i<numSamples; i++) {
     if (Math.abs(buffer[i]) > maxAmp) maxAmp = Math.abs(buffer[i]);
 }
 
-// Write WAV file
 const dataSize = numSamples * 2;
 const fileBuffer = Buffer.alloc(44 + dataSize);
 

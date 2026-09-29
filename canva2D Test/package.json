@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.3.0",
-    "playwright": "^1.42.1"
+    "playwright": "^1.42.1",
+    "tone": "^14.9.17"
   }
 }

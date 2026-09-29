@@ -25,23 +25,30 @@
     <!-- The canvas element will be configured by the animation logic or the renderer -->
     <canvas id="stage" width="1920" height="1080"></canvas>
     
+    <img id="portrait" src="asset/1756387223128.jpg" style="display:none;" crossorigin="anonymous" />
+    <script src="timeline.js"></script>
     <script>
-        // Load font before animation starts
-        window.fontReady = false;
-        async function loadFonts() {
+        // Load fonts and images before animation starts
+        window.assetsReady = false;
+        async function loadAssets() {
             try {
                 const font = new FontFace('Geist', 'url(GeistVF.woff2)', { weight: '100 900' });
                 await font.load();
                 document.fonts.add(font);
                 console.log('Geist font loaded');
-                window.fontReady = true;
+                
+                const img = document.getElementById('portrait');
+                if (!img.complete) {
+                    await new Promise(r => { img.onload = r; img.onerror = r; });
+                }
+                
+                window.assetsReady = true;
             } catch (err) {
-                console.error('Font loading error:', err);
-                // Fallback to true so we don't hang
-                window.fontReady = true;
+                console.error('Asset loading error:', err);
+                window.assetsReady = true; // Fallback
             }
         }
-        loadFonts();
+        loadAssets();
     </script>
 
     <!-- Load the animation logic -->

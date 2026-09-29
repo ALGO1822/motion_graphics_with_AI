@@ -51,7 +51,7 @@ async function renderFrames() {
     await page.goto(fileUrl);
     
     console.log('Waiting for fonts and animation config to load...');
-    await page.waitForFunction(() => window.fontReady === true && window.animationConfig !== undefined);
+    await page.waitForFunction(() => window.assetsReady === true && window.animationConfig !== undefined);
     console.log('Fonts and Config loaded.');
     
     // Get animation configuration
